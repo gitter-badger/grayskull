@@ -8,7 +8,7 @@ from operator import itemgetter
 from pathlib import Path
 from subprocess import check_output
 from tempfile import mkdtemp
-from typing import List, Optional, Union
+from typing import Iterator, List, Optional, Union
 
 import requests
 from colorama import Fore
@@ -294,10 +294,42 @@ def get_license_type(path_license: str, default: Optional[str] = None) -> Option
         log.info(f"Match too low for recipe {best_match}, using the default {default}")
         return default
     higher_match = best_match[0]
-    equal_values = [val[0] for val in best_match if higher_match[1] == val[1]]
+    equal_values = [val[0] for val in best_match if val[1] >= higher_match[1] * 0.9]
     if len(equal_values) > 1:
         higher_match = process.extractOne(
             license_content, equal_values, scorer=token_set_ratio
         )
     index_license = licenses_text.index(higher_match[0])
     return all_licenses[index_license][0]
+
+
+@lru_cache(maxsize=5)
+def get_all_licenses_spdx() -> Iterator:
+    all_license_response = requests.get(url="https://spdx.org/licenses/licenses.json")
+    if all_license_response.status_code != 200:
+        msg = (
+            f"It was not possible to communicate with spdx.org.\n"
+            f"  - Status code: {all_license_response.status_code}"
+        )
+        log.error(msg)
+        print(f"{Fore.RED}{msg}{Fore.RESET}")
+        iter([])
+
+    result = []
+    all_licenses = all_license_response.json()
+    for lic in all_licenses["licenses"]:
+        url_lic = f"https://spdx.org/licenses/{lic['licenseId']}.json"
+        resp_single_license = requests.get(url=url_lic)
+        if resp_single_license.status_code != 200:
+            log.error(
+                f"It was not possible to recover data from spdx.org ({url_lic})."
+                f" Status code: {resp_single_license.status_code}"
+            )
+            print(
+                f"{Fore.LIGHTRED_EX}Cannot recover license information from"
+                f" spdx for {lic['licenseId']}"
+            )
+            continue
+        single_license = resp_single_license.json()
+        result.append((lic["licenseId"], single_license["licenseText"]))
+    return result
